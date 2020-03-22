@@ -10,7 +10,7 @@ Fork of [libp2p/go-libp2p-kbucket](https://github.com/libp2p/go-libp2p-kbucket) 
 
 ## Documenation
 
-See https://godoc.org/github.com/bdware/go-libp2p-kbucket.
+See [API documentation](https://pkg.go.dev/github.com/bdware/go-libp2p-kbucket).
 
 ## Contribute
 
@@ -24,10 +24,11 @@ Feel free to join in. All welcome. Open an [issue](https://github.com/BDWare/go-
 
 [MIT](LICENSE)
 
-Copyright for portions of this fork are held by [Protocol Labs, 2016] as
-part of the original [go-libp2p-kbucket](https://github.com/libp2p/go-libp2p-kbucket) project.
+Copyright for portions of this fork are held by [Protocol Labs, 2016] as part of the original [go-libp2p-kbucket](https://github.com/libp2p/go-libp2p-kbucket) project.
 
 All other copyright for this fork are held by [The BDWare Authors, 2020].
+
+All rights reserved.
 
 ---
 
