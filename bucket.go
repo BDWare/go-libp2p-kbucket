@@ -4,23 +4,20 @@ package kbucket
 
 import (
 	"container/list"
+	"time"
+
 	"github.com/libp2p/go-libp2p-core/peer"
-)
-
-// PeerState is the state of the peer as seen by the Routing Table.
-type PeerState int
-
-const (
-	// PeerStateActive indicates that we know the peer is active/alive.
-	PeerStateActive PeerState = iota
-	// PeerStateMissing indicates that we do not know the state of the peer.
-	PeerStateMissing
 )
 
 // PeerInfo holds all related information for a peer in the K-Bucket.
 type PeerInfo struct {
-	Id    peer.ID
-	State PeerState
+	Id peer.ID
+	// LastSuccessfulOutboundQuery is the time instant when we last made a successful
+	// outbound query to this peer
+	LastSuccessfulOutboundQuery time.Time
+
+	// Id of the peer in the DHT XOR keyspace
+	dhtId ID
 }
 
 // bucket holds a list of peers.
@@ -108,8 +105,8 @@ func (b *bucket) split(cpl int, target ID) *bucket {
 	newbuck.list = out
 	e := b.list.Front()
 	for e != nil {
-		peerID := ConvertPeerID(e.Value.(*PeerInfo).Id)
-		peerCPL := CommonPrefixLen(peerID, target)
+		pDhtId := e.Value.(*PeerInfo).dhtId
+		peerCPL := CommonPrefixLen(pDhtId, target)
 		if peerCPL > cpl {
 			cur := e
 			out.PushBack(e.Value)
