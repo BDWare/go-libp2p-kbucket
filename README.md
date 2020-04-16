@@ -3,10 +3,11 @@
 Fork of [libp2p/go-libp2p-kbucket](https://github.com/libp2p/go-libp2p-kbucket) used by BDWare projects.
 
 [![](https://img.shields.io/badge/made%20by-Protocol%20Labs-blue.svg?style=flat-square)](https://protocol.ai)
-[![](https://img.shields.io/badge/project-BDWare-yellow.svg?style=flat-square)](http://github.com/bdware)
+[![](https://img.shields.io/badge/project-BDWare-red.svg?style=flat-square)](http://bdware.org/)
+[![go.dev reference](https://img.shields.io/badge/go.dev-reference-007d9c?logo=go&logoColor=white&style=flat-square)](https://pkg.go.dev/github.com/bdware/go-libp2p-kbucket)
 [![Build Status](https://travis-ci.com/BDWare/go-libp2p-kbucket.svg?branch=master)](https://travis-ci.com/BDWare/go-libp2p-kbucket)
 
-> A kbucket implementation for use as a routing table in go-libp2p-kad-dht
+> A kbucket implementation for use as a routing table in go-libp2p-kad-dht 
 
 ## Documenation
 
