@@ -12,9 +12,14 @@ import (
 // PeerInfo holds all related information for a peer in the K-Bucket.
 type PeerInfo struct {
 	Id peer.ID
-	// LastSuccessfulOutboundQuery is the time instant when we last made a successful
-	// outbound query to this peer
-	LastSuccessfulOutboundQuery time.Time
+
+	// LastUsefulAt is the time instant at which the peer was last "useful" to us.
+	// Please see the DHT docs for the definition of usefulness.
+	LastUsefulAt time.Time
+
+	// LastSuccessfulOutboundQueryAt is the time instant at which we last got a
+	// successful query response from the peer.
+	LastSuccessfulOutboundQueryAt time.Time
 
 	// Id of the peer in the DHT XOR keyspace
 	dhtId ID
@@ -38,12 +43,34 @@ func newBucket() *bucket {
 // returns all peers in the bucket
 // it is safe for the caller to modify the returned objects as it is a defensive copy
 func (b *bucket) peers() []PeerInfo {
-	var ps []PeerInfo
+	ps := make([]PeerInfo, 0, b.len())
 	for e := b.list.Front(); e != nil; e = e.Next() {
 		p := e.Value.(*PeerInfo)
 		ps = append(ps, *p)
 	}
 	return ps
+}
+
+// returns the "minimum" peer in the bucket based on the `lessThan` comparator passed to it.
+// It is NOT safe for the comparator to mutate the given `PeerInfo`
+// as we pass in a pointer to it.
+// It is NOT safe to modify the returned value.
+func (b *bucket) min(lessThan func(p1 *PeerInfo, p2 *PeerInfo) bool) *PeerInfo {
+	if b.list.Len() == 0 {
+		return nil
+	}
+
+	minVal := b.list.Front().Value.(*PeerInfo)
+
+	for e := b.list.Front().Next(); e != nil; e = e.Next() {
+		val := e.Value.(*PeerInfo)
+
+		if lessThan(val, minVal) {
+			minVal = val
+		}
+	}
+
+	return minVal
 }
 
 // return the Ids of all the peers in the bucket.

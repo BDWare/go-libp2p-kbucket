@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"sync"
 	"time"
 
@@ -49,15 +50,34 @@ type RoutingTable struct {
 	PeerRemoved func(peer.ID)
 	PeerAdded   func(peer.ID)
 
-	// maxLastSuccessfulOutboundThreshold is the max threshold/upper limit for the value of "LastSuccessfulOutboundQuery"
-	// of the peer in the bucket above which we will evict it to make place for a new peer if the bucket
-	// is full
-	maxLastSuccessfulOutboundThreshold float64
+	// usefulnessGracePeriod is the maximum grace period we will give to a
+	// peer in the bucket to be useful to us, failing which, we will evict
+	// it to make place for a new peer if the bucket is full
+	usefulnessGracePeriod time.Duration
+
+	// Estimated average number of bits improved per step.
+	avgBitsImprovedPerStep float64
+	// Estimated average numbter of round trip required per step.
+	// Examples:
+	// For TCP+TLS1.3, avgRoundTripPerStep = 4
+	// For QUIC, avgRoundTripPerStep = 2
+	avgRoundTripPerStep float64
 }
 
 // NewRoutingTable creates a new routing table with a given bucketsize, local ID, and latency tolerance.
-// Passing a nil PeerValidationFunc disables periodic table cleanup.
-func NewRoutingTable(bucketsize int, localID ID, latency time.Duration, m peerstore.Metrics, maxLastSuccessfulOutboundThreshold float64) (*RoutingTable, error) {
+func NewRoutingTable(bucketsize int, localID ID, latency time.Duration, m peerstore.Metrics, usefulnessGracePeriod time.Duration, avgBitsImprovedPerStep, avgRoundTripPerStep float64) (*RoutingTable, error) {
+
+	// Estimate the average number of bits improved per step.
+	// Reference: D. Stutzbach and R. Rejaie, "Improving Lookup Performance Over a Widely-Deployed DHT," Proceedings IEEE INFOCOM 2006.
+	// For the basic Kademlia approach D(1,1,k), m(1,k) approaches log(2,k)+0.3327, the number of bits improved on average is 1+m(1,k)=1.3327+log(2,k)
+	if avgBitsImprovedPerStep == 0 {
+		avgBitsImprovedPerStep = 1.3327 + math.Log2(float64(bucketsize))
+	}
+	if avgRoundTripPerStep == 0 {
+		// Default to making CPL most important by assuming the worst case scenario: For TCP+TLS1.3, avgRoundTripPerStep = 4
+		avgRoundTripPerStep = 4
+	}
+
 	rt := &RoutingTable{
 		buckets:    []*bucket{newBucket()},
 		bucketsize: bucketsize,
@@ -71,7 +91,10 @@ func NewRoutingTable(bucketsize int, localID ID, latency time.Duration, m peerst
 		PeerRemoved: func(peer.ID) {},
 		PeerAdded:   func(peer.ID) {},
 
-		maxLastSuccessfulOutboundThreshold: maxLastSuccessfulOutboundThreshold,
+		usefulnessGracePeriod: usefulnessGracePeriod,
+
+		avgBitsImprovedPerStep: avgBitsImprovedPerStep,
+		avgRoundTripPerStep:    avgRoundTripPerStep,
 	}
 
 	rt.ctx, rt.ctxCancel = context.WithCancel(context.Background())
@@ -86,10 +109,36 @@ func (rt *RoutingTable) Close() error {
 	return nil
 }
 
-// TryAddPeer tries to add a peer to the Routing table. If the peer ALREADY exists in the Routing Table, this call is a no-op.
+// NPeersForCPL returns the number of peers we have for a given Cpl
+func (rt *RoutingTable) NPeersForCpl(cpl uint) int {
+	rt.tabLock.RLock()
+	defer rt.tabLock.RUnlock()
+
+	// it's in the last bucket
+	if int(cpl) >= len(rt.buckets)-1 {
+		count := 0
+		b := rt.buckets[len(rt.buckets)-1]
+		for _, p := range b.peers() {
+			if CommonPrefixLen(rt.local, p.dhtId) == int(cpl) {
+				count++
+			}
+		}
+		return count
+	} else {
+		return rt.buckets[cpl].len()
+	}
+}
+
+// TryAddPeer tries to add a peer to the Routing table.
+// If the peer ALREADY exists in the Routing Table and has been queried before, this call is a no-op.
+// If the peer ALREADY exists in the Routing Table but hasn't been queried before, we set it's LastUsefulAt value to
+// the current time. This needs to done because we don't mark peers as "Useful"(by setting the LastUsefulAt value)
+// when we first connect to them.
+//
 // If the peer is a queryPeer i.e. we queried it or it queried us, we set the LastSuccessfulOutboundQuery to the current time.
 // If the peer is just a peer that we connect to/it connected to us without any DHT query, we consider it as having
 // no LastSuccessfulOutboundQuery.
+//
 //
 // If the logical bucket to which the peer belongs is full and it's not the last bucket, we try to replace an existing peer
 // whose LastSuccessfulOutboundQuery is above the maximum allowed threshold in that bucket with the new peer.
@@ -111,13 +160,18 @@ func (rt *RoutingTable) TryAddPeer(p peer.ID, queryPeer bool) (bool, error) {
 func (rt *RoutingTable) addPeer(p peer.ID, queryPeer bool) (bool, error) {
 	bucketID := rt.bucketIdForPeer(p)
 	bucket := rt.buckets[bucketID]
-	var lastSuccessfulOutboundQuery time.Time
+	var lastUsefulAt time.Time
 	if queryPeer {
-		lastSuccessfulOutboundQuery = time.Now()
+		lastUsefulAt = time.Now()
 	}
 
 	// peer already exists in the Routing Table.
 	if peer := bucket.getPeer(p); peer != nil {
+		// if we're querying the peer first time after adding it, let's give it a
+		// usefulness bump. This will ONLY happen once.
+		if peer.LastUsefulAt.IsZero() && queryPeer {
+			peer.LastUsefulAt = lastUsefulAt
+		}
 		return false, nil
 	}
 
@@ -129,7 +183,8 @@ func (rt *RoutingTable) addPeer(p peer.ID, queryPeer bool) (bool, error) {
 
 	// We have enough space in the bucket (whether spawned or grouped).
 	if bucket.len() < rt.bucketsize {
-		bucket.pushFront(&PeerInfo{p, lastSuccessfulOutboundQuery, ConvertPeerID(p)})
+		bucket.pushFront(&PeerInfo{Id: p, LastUsefulAt: lastUsefulAt, LastSuccessfulOutboundQueryAt: time.Now(),
+			dhtId: ConvertPeerID(p)})
 		rt.PeerAdded(p)
 		return true, nil
 	}
@@ -143,7 +198,8 @@ func (rt *RoutingTable) addPeer(p peer.ID, queryPeer bool) (bool, error) {
 
 		// push the peer only if the bucket isn't overflowing after slitting
 		if bucket.len() < rt.bucketsize {
-			bucket.pushFront(&PeerInfo{p, lastSuccessfulOutboundQuery, ConvertPeerID(p)})
+			bucket.pushFront(&PeerInfo{Id: p, LastUsefulAt: lastUsefulAt, LastSuccessfulOutboundQueryAt: time.Now(),
+				dhtId: ConvertPeerID(p)})
 			rt.PeerAdded(p)
 			return true, nil
 		}
@@ -151,15 +207,17 @@ func (rt *RoutingTable) addPeer(p peer.ID, queryPeer bool) (bool, error) {
 
 	// the bucket to which the peer belongs is full. Let's try to find a peer
 	// in that bucket with a LastSuccessfulOutboundQuery value above the maximum threshold and replace it.
-	allPeers := bucket.peers()
-	for _, pc := range allPeers {
-		if float64(time.Since(pc.LastSuccessfulOutboundQuery)) > rt.maxLastSuccessfulOutboundThreshold {
-			// let's evict it and add the new peer
-			if bucket.remove(pc.Id) {
-				bucket.pushFront(&PeerInfo{p, lastSuccessfulOutboundQuery, ConvertPeerID(p)})
-				rt.PeerAdded(p)
-				return true, nil
-			}
+	minLast := bucket.min(func(first *PeerInfo, second *PeerInfo) bool {
+		return first.LastUsefulAt.Before(second.LastUsefulAt)
+	})
+
+	if time.Since(minLast.LastUsefulAt) > rt.usefulnessGracePeriod {
+		// let's evict it and add the new peer
+		if bucket.remove(minLast.Id) {
+			bucket.pushFront(&PeerInfo{Id: p, LastUsefulAt: lastUsefulAt, LastSuccessfulOutboundQueryAt: time.Now(),
+				dhtId: ConvertPeerID(p)})
+			rt.PeerAdded(p)
+			return true, nil
 		}
 	}
 
@@ -180,9 +238,9 @@ func (rt *RoutingTable) GetPeerInfos() []PeerInfo {
 	return pis
 }
 
-// UpdateLastSuccessfulOutboundQuery updates the LastSuccessfulOutboundQuery time of the peer
+// UpdateLastSuccessfulOutboundQuery updates the LastSuccessfulOutboundQueryAt time of the peer.
 // Returns true if the update was successful, false otherwise.
-func (rt *RoutingTable) UpdateLastSuccessfulOutboundQuery(p peer.ID, t time.Time) bool {
+func (rt *RoutingTable) UpdateLastSuccessfulOutboundQueryAt(p peer.ID, t time.Time) bool {
 	rt.tabLock.Lock()
 	defer rt.tabLock.Unlock()
 
@@ -190,7 +248,23 @@ func (rt *RoutingTable) UpdateLastSuccessfulOutboundQuery(p peer.ID, t time.Time
 	bucket := rt.buckets[bucketID]
 
 	if pc := bucket.getPeer(p); pc != nil {
-		pc.LastSuccessfulOutboundQuery = t
+		pc.LastSuccessfulOutboundQueryAt = t
+		return true
+	}
+	return false
+}
+
+// UpdateLastUsefulAt updates the LastUsefulAt time of the peer.
+// Returns true if the update was successful, false otherwise.
+func (rt *RoutingTable) UpdateLastUsefulAt(p peer.ID, t time.Time) bool {
+	rt.tabLock.Lock()
+	defer rt.tabLock.Unlock()
+
+	bucketID := rt.bucketIdForPeer(p)
+	bucket := rt.buckets[bucketID]
+
+	if pc := bucket.getPeer(p); pc != nil {
+		pc.LastUsefulAt = t
 		return true
 	}
 	return false
@@ -210,9 +284,25 @@ func (rt *RoutingTable) removePeer(p peer.ID) {
 	bucketID := rt.bucketIdForPeer(p)
 	bucket := rt.buckets[bucketID]
 	if bucket.remove(p) {
+		for {
+			lastBucketIndex := len(rt.buckets) - 1
+
+			// remove the last bucket if it's empty and it isn't the only bucket we have
+			if len(rt.buckets) > 1 && rt.buckets[lastBucketIndex].len() == 0 {
+				rt.buckets[lastBucketIndex] = nil
+				rt.buckets = rt.buckets[:lastBucketIndex]
+			} else if len(rt.buckets) >= 2 && rt.buckets[lastBucketIndex-1].len() == 0 {
+				// if the second last bucket just became empty, remove and replace it with the last bucket.
+				rt.buckets[lastBucketIndex-1] = rt.buckets[lastBucketIndex]
+				rt.buckets[lastBucketIndex] = nil
+				rt.buckets = rt.buckets[:lastBucketIndex]
+			} else {
+				break
+			}
+		}
+
 		// peer removed callback
 		rt.PeerRemoved(p)
-		return
 	}
 }
 
@@ -316,6 +406,78 @@ func (rt *RoutingTable) NearestPeers(id ID, count int) []peer.ID {
 	return out
 }
 
+// NearestPeersConsideringLatency returns a list of the 'count' closest peers
+// to the given ID by considering both xor distance and latency
+func (rt *RoutingTable) NearestPeersConsideringLatency(id ID, count int) []peer.ID {
+	// This is the number of bits _we_ share with the key. All peers in this
+	// bucket share cpl bits with us and will therefore share at least cpl+1
+	// bits with the given key. +1 because both the target and all peers in
+	// this bucket differ from us in the cpl bit.
+	cpl := CommonPrefixLen(id, rt.local)
+
+	// It's assumed that this also protects the buckets.
+	rt.tabLock.RLock()
+
+	// Get bucket index or last bucket
+	if cpl >= len(rt.buckets) {
+		cpl = len(rt.buckets) - 1
+	}
+
+	// init sorter
+	pdls := peerDistanceLatencySorter{
+		peers:                  make([]peerDistanceCplLatency, 0, count+rt.bucketsize),
+		metrics:                rt.metrics,
+		local:                  rt.local,
+		target:                 id,
+		avgBitsImprovedPerStep: rt.avgBitsImprovedPerStep,
+		avgRoundTripPerStep:    rt.avgRoundTripPerStep,
+		avgLatency:             rt.avgLatency(),
+	}
+
+	// Add peers from the target bucket (cpl+1 shared bits).
+	pdls.appendPeersFromList(rt.buckets[cpl].list)
+
+	// If we're short, add peers from all buckets to the right. All buckets
+	// to the right share exactly cpl bits (as opposed to the cpl+1 bits
+	// shared by the peers in the cpl bucket).
+	//
+	// This is, unfortunately, less efficient than we'd like. We will switch
+	// to a trie implementation eventually which will allow us to find the
+	// closest N peers to any target key.
+
+	if pdls.Len() < count {
+		for i := cpl + 1; i < len(rt.buckets); i++ {
+			pdls.appendPeersFromList(rt.buckets[i].list)
+		}
+	}
+
+	// If we're still short, add in buckets that share _fewer_ bits. We can
+	// do this bucket by bucket because each bucket will share 1 fewer bit
+	// than the last.
+	//
+	// * bucket cpl-1: cpl-1 shared bits.
+	// * bucket cpl-2: cpl-2 shared bits.
+	// ...
+	for i := cpl - 1; i >= 0 && pdls.Len() < count; i-- {
+		pdls.appendPeersFromList(rt.buckets[i].list)
+	}
+	rt.tabLock.RUnlock()
+
+	// Sort by distance to local peer
+	pdls.sort()
+
+	if count < pdls.Len() {
+		pdls.peers = pdls.peers[:count]
+	}
+
+	out := make([]peer.ID, 0, pdls.Len())
+	for _, p := range pdls.peers {
+		out = append(out, p.p)
+	}
+
+	return out
+}
+
 // Size returns the total number of peers in the routing table
 func (rt *RoutingTable) Size() int {
 	var tot int
@@ -376,6 +538,24 @@ func (rt *RoutingTable) maxCommonPrefix() uint {
 		if rt.buckets[i].len() > 0 {
 			return rt.buckets[i].maxCommonPrefix(rt.local)
 		}
+	}
+	return 0
+}
+
+// avgLatency compute average latency of peers in nanoseconds.
+func (rt *RoutingTable) avgLatency() int64 {
+	latency := int64(0)
+	count := int64(0)
+	for _, v := range rt.ListPeers() {
+		l := rt.metrics.LatencyEWMA(v)
+		// Filter latency that is too large to prevent bias.
+		if 0 < l && l.Seconds() < 5 {
+			latency += l.Nanoseconds()
+			count++
+		}
+	}
+	if count > 0 {
+		return latency / count
 	}
 	return 0
 }
