@@ -25,7 +25,7 @@ func TestPrint(t *testing.T) {
 	t.Parallel()
 	local := test.RandPeerIDFatal(t)
 	m := pstore.NewMetrics()
-	rt, err := NewRoutingTable(1, ConvertPeerID(local), time.Hour, m, NoOpThreshold, 0, 0)
+	rt, err := NewRoutingTable(1, ConvertPeerID(local), time.Hour, m, NoOpThreshold, false, 0, 0)
 	require.NoError(t, err)
 	rt.Print()
 }
@@ -92,7 +92,7 @@ func TestNPeersForCpl(t *testing.T) {
 	t.Parallel()
 	local := test.RandPeerIDFatal(t)
 	m := pstore.NewMetrics()
-	rt, err := NewRoutingTable(2, ConvertPeerID(local), time.Hour, m, NoOpThreshold, 0, 0)
+	rt, err := NewRoutingTable(2, ConvertPeerID(local), time.Hour, m, NoOpThreshold, false, 0, 0)
 	require.NoError(t, err)
 
 	require.Equal(t, 0, rt.NPeersForCpl(0))
@@ -129,7 +129,7 @@ func TestEmptyBucketCollapse(t *testing.T) {
 	local := test.RandPeerIDFatal(t)
 
 	m := pstore.NewMetrics()
-	rt, err := NewRoutingTable(1, ConvertPeerID(local), time.Hour, m, NoOpThreshold, 0, 0)
+	rt, err := NewRoutingTable(1, ConvertPeerID(local), time.Hour, m, NoOpThreshold, false, 0, 0)
 	require.NoError(t, err)
 
 	// generate peers with cpl 0,1,2 & 3
@@ -224,7 +224,7 @@ func TestRemovePeer(t *testing.T) {
 	local := test.RandPeerIDFatal(t)
 
 	m := pstore.NewMetrics()
-	rt, err := NewRoutingTable(2, ConvertPeerID(local), time.Hour, m, NoOpThreshold, 0, 0)
+	rt, err := NewRoutingTable(2, ConvertPeerID(local), time.Hour, m, NoOpThreshold, false, 0, 0)
 	require.NoError(t, err)
 
 	p1, _ := rt.GenRandPeerID(0)
@@ -253,7 +253,7 @@ func TestTableCallbacks(t *testing.T) {
 
 	local := test.RandPeerIDFatal(t)
 	m := pstore.NewMetrics()
-	rt, err := NewRoutingTable(10, ConvertPeerID(local), time.Hour, m, NoOpThreshold, 0, 0)
+	rt, err := NewRoutingTable(10, ConvertPeerID(local), time.Hour, m, NoOpThreshold, false, 0, 0)
 	require.NoError(t, err)
 
 	peers := make([]peer.ID, 100)
@@ -302,7 +302,7 @@ func TestTryAddPeerLoad(t *testing.T) {
 
 	local := test.RandPeerIDFatal(t)
 	m := pstore.NewMetrics()
-	rt, err := NewRoutingTable(10, ConvertPeerID(local), time.Hour, m, NoOpThreshold, 0, 0)
+	rt, err := NewRoutingTable(10, ConvertPeerID(local), time.Hour, m, NoOpThreshold, false, 0, 0)
 	require.NoError(t, err)
 
 	peers := make([]peer.ID, 100)
@@ -328,7 +328,7 @@ func TestTableFind(t *testing.T) {
 
 	local := test.RandPeerIDFatal(t)
 	m := pstore.NewMetrics()
-	rt, err := NewRoutingTable(10, ConvertPeerID(local), time.Hour, m, NoOpThreshold, 0, 0)
+	rt, err := NewRoutingTable(10, ConvertPeerID(local), time.Hour, m, NoOpThreshold, false, 0, 0)
 	require.NoError(t, err)
 
 	peers := make([]peer.ID, 100)
@@ -347,7 +347,7 @@ func TestTableFind(t *testing.T) {
 func TestUpdateLastSuccessfulOutboundQueryAt(t *testing.T) {
 	local := test.RandPeerIDFatal(t)
 	m := pstore.NewMetrics()
-	rt, err := NewRoutingTable(10, ConvertPeerID(local), time.Hour, m, NoOpThreshold, 0, 0)
+	rt, err := NewRoutingTable(10, ConvertPeerID(local), time.Hour, m, NoOpThreshold, false, 0, 0)
 	require.NoError(t, err)
 
 	p := test.RandPeerIDFatal(t)
@@ -368,7 +368,7 @@ func TestUpdateLastSuccessfulOutboundQueryAt(t *testing.T) {
 func TestUpdateLastUsefulAt(t *testing.T) {
 	local := test.RandPeerIDFatal(t)
 	m := pstore.NewMetrics()
-	rt, err := NewRoutingTable(10, ConvertPeerID(local), time.Hour, m, NoOpThreshold, 0, 0)
+	rt, err := NewRoutingTable(10, ConvertPeerID(local), time.Hour, m, NoOpThreshold, false, 0, 0)
 	require.NoError(t, err)
 
 	p := test.RandPeerIDFatal(t)
@@ -392,7 +392,7 @@ func TestTryAddPeer(t *testing.T) {
 
 	local := test.RandPeerIDFatal(t)
 	m := pstore.NewMetrics()
-	rt, err := NewRoutingTable(2, ConvertPeerID(local), time.Hour, m, minThreshold, 0, 0)
+	rt, err := NewRoutingTable(2, ConvertPeerID(local), time.Hour, m, minThreshold, false, 0, 0)
 	require.NoError(t, err)
 
 	// generate 2 peers to saturate the first bucket for cpl=0
@@ -459,7 +459,7 @@ func TestTableFindMultiple(t *testing.T) {
 
 	local := test.RandPeerIDFatal(t)
 	m := pstore.NewMetrics()
-	rt, err := NewRoutingTable(20, ConvertPeerID(local), time.Hour, m, NoOpThreshold, 0, 0)
+	rt, err := NewRoutingTable(20, ConvertPeerID(local), time.Hour, m, NoOpThreshold, false, 0, 0)
 	require.NoError(t, err)
 
 	peers := make([]peer.ID, 100)
@@ -483,80 +483,60 @@ func TestTableFindMultipleBuckets(t *testing.T) {
 	localId := ConvertPeerID(local)
 	m := pstore.NewMetrics()
 
-	avgBitsImprovedPerStep := 1.3327 + math.Log2(float64(bucketsize))
-	avgRoundTripPerStep := 4.0
-
-	rt, err := NewRoutingTable(bucketsize, localId, time.Hour, m, NoOpThreshold, avgBitsImprovedPerStep, avgRoundTripPerStep)
-	require.NoError(t, err)
-
 	peers := make([]peer.ID, 100)
 	for i := 0; i < 100; i++ {
 		peers[i] = test.RandPeerIDFatal(t)
-		rt.TryAddPeer(peers[i], true)
 	}
 
 	target := peers[2]
 	targetId := ConvertPeerID(target)
 
-	/* Test closest peers sort by xor distance. */
+	subTest := func(rt *RoutingTable) {
+		for i := 0; i < 100; i++ {
+			rt.TryAddPeer(peers[i], true)
+		}
 
-	closest := SortClosestPeers(rt.ListPeers(), targetId)
+		closest := rt.SortClosestPeers(rt.ListPeers(), targetId)
 
-	t.Logf("Searching for peer: '%s'", target)
+		t.Logf("Searching for peer: '%s'", target)
 
-	// should be able to find at least 30
-	// ~31 (logtwo(100) * 5)
-	found := rt.NearestPeers(targetId, 20)
-	if len(found) != 20 {
-		t.Fatalf("asked for 20 peers, got %d", len(found))
-	}
-	for i, p := range found {
-		if p != closest[i] {
-			t.Fatalf("unexpected peer %d", i)
+		// should be able to find at least 30
+		// ~31 (logtwo(100) * 5)
+		found := rt.NearestPeers(targetId, 20)
+		if len(found) != 20 {
+			t.Fatalf("asked for 20 peers, got %d", len(found))
+		}
+		for i, p := range found {
+			if p != closest[i] {
+				t.Fatalf("unexpected peer %d", i)
+			}
+		}
+
+		// Ok, now let's try finding all of them.
+		found = rt.NearestPeers(targetId, 100)
+		if len(found) != rt.Size() {
+			t.Fatalf("asked for %d peers, got %d", rt.Size(), len(found))
+		}
+
+		for i, p := range found {
+			if p != closest[i] {
+				t.Fatalf("unexpected peer %d", i)
+			}
 		}
 	}
 
-	// Ok, now let's try finding all of them.
-	found = rt.NearestPeers(targetId, 100)
-	if len(found) != rt.Size() {
-		t.Fatalf("asked for %d peers, got %d", rt.Size(), len(found))
-	}
+	// Test closest peers sort by xor distance.
+	rt, err := NewRoutingTable(bucketsize, localId, time.Hour, m, NoOpThreshold, false, 0, 0)
+	require.NoError(t, err)
+	subTest(rt)
 
-	for i, p := range found {
-		if p != closest[i] {
-			t.Fatalf("unexpected peer %d", i)
-		}
-	}
-
-	/* #BDWare Test closest peers sort by xor distance and latency. */
-
-	closest = SortClosestPeersConsideringLatency(rt.ListPeers(), m, localId, targetId, avgBitsImprovedPerStep, avgRoundTripPerStep, rt.avgLatency())
-
-	t.Logf("Searching for peer: '%s'", target)
-
-	// should be able to find at least 30
-	// ~31 (logtwo(100) * 5)
-	found = rt.NearestPeersConsideringLatency(targetId, 20)
-	if len(found) != 20 {
-		t.Fatalf("asked for 20 peers, got %d", len(found))
-	}
-	for i, p := range found {
-		if p != closest[i] {
-			t.Fatalf("unexpected peer %d", i)
-		}
-	}
-
-	// Ok, now let's try finding all of them.
-	found = rt.NearestPeersConsideringLatency(targetId, 100)
-	if len(found) != rt.Size() {
-		t.Fatalf("asked for %d peers, got %d", rt.Size(), len(found))
-	}
-
-	for i, p := range found {
-		if p != closest[i] {
-			t.Fatalf("unexpected peer %d", i)
-		}
-	}
+	// #BDWare
+	// Test closest peers sort by xor distance and latency.
+	avgBitsImprovedPerStep := 1.3327 + math.Log2(float64(bucketsize))
+	avgRoundTripPerStep := 4.0
+	rt, err = NewRoutingTable(bucketsize, localId, time.Hour, m, NoOpThreshold, true, avgBitsImprovedPerStep, avgRoundTripPerStep)
+	require.NoError(t, err)
+	subTest(rt)
 }
 
 // Looks for race conditions in table operations. For a more 'certain'
@@ -567,7 +547,7 @@ func TestTableMultithreaded(t *testing.T) {
 
 	local := peer.ID("localPeer")
 	m := pstore.NewMetrics()
-	tab, err := NewRoutingTable(20, ConvertPeerID(local), time.Hour, m, NoOpThreshold, 0, 0)
+	tab, err := NewRoutingTable(20, ConvertPeerID(local), time.Hour, m, NoOpThreshold, false, 0, 0)
 	require.NoError(t, err)
 	var peers []peer.ID
 	for i := 0; i < 500; i++ {
@@ -606,7 +586,7 @@ func TestTableMultithreaded(t *testing.T) {
 func TestGetPeerInfos(t *testing.T) {
 	local := test.RandPeerIDFatal(t)
 	m := pstore.NewMetrics()
-	rt, err := NewRoutingTable(10, ConvertPeerID(local), time.Hour, m, NoOpThreshold, 0, 0)
+	rt, err := NewRoutingTable(10, ConvertPeerID(local), time.Hour, m, NoOpThreshold, false, 0, 0)
 	require.NoError(t, err)
 
 	require.Empty(t, rt.GetPeerInfos())
@@ -638,7 +618,7 @@ func BenchmarkAddPeer(b *testing.B) {
 	b.StopTimer()
 	local := ConvertKey("localKey")
 	m := pstore.NewMetrics()
-	tab, err := NewRoutingTable(20, local, time.Hour, m, NoOpThreshold, 0, 0)
+	tab, err := NewRoutingTable(20, local, time.Hour, m, NoOpThreshold, false, 0, 0)
 	require.NoError(b, err)
 
 	var peers []peer.ID
@@ -656,7 +636,7 @@ func BenchmarkFinds(b *testing.B) {
 	b.StopTimer()
 	local := ConvertKey("localKey")
 	m := pstore.NewMetrics()
-	tab, err := NewRoutingTable(20, local, time.Hour, m, NoOpThreshold, 0, 0)
+	tab, err := NewRoutingTable(20, local, time.Hour, m, NoOpThreshold, false, 0, 0)
 	require.NoError(b, err)
 
 	var peers []peer.ID

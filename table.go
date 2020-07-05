@@ -62,6 +62,9 @@ type RoutingTable struct {
 	usefulnessGracePeriod time.Duration
 
 	// #BDWare
+	// If enabled, RoutingTable will find the closest peers to a given ID by considering both xor distance and latency.
+	// The strategy can be tuned with avgBitsImprovedPerStep and avgRoundTripPerStep.
+	considerLatency bool
 	// Estimated average number of bits improved per step.
 	avgBitsImprovedPerStep float64
 	// Estimated average numbter of round trip required per step.
@@ -72,7 +75,16 @@ type RoutingTable struct {
 }
 
 // NewRoutingTable creates a new routing table with a given bucketsize, local ID, and latency tolerance.
-func NewRoutingTable(bucketsize int, localID ID, latency time.Duration, m peerstore.Metrics, usefulnessGracePeriod time.Duration, avgBitsImprovedPerStep, avgRoundTripPerStep float64) (*RoutingTable, error) {
+func NewRoutingTable(
+	bucketsize int,
+	localID ID,
+	latency time.Duration,
+	m peerstore.Metrics,
+	usefulnessGracePeriod time.Duration,
+	considerLatency bool,
+	avgBitsImprovedPerStep,
+	avgRoundTripPerStep float64,
+) (*RoutingTable, error) {
 
 	// #BDWare
 	// Estimate the average number of bits improved per step.
@@ -101,6 +113,7 @@ func NewRoutingTable(bucketsize int, localID ID, latency time.Duration, m peerst
 
 		usefulnessGracePeriod: usefulnessGracePeriod,
 
+		considerLatency:        considerLatency,
 		avgBitsImprovedPerStep: avgBitsImprovedPerStep,
 		avgRoundTripPerStep:    avgRoundTripPerStep,
 	}
@@ -350,6 +363,7 @@ func (rt *RoutingTable) NearestPeer(id ID) peer.ID {
 }
 
 // NearestPeers returns a list of the 'count' closest peers to the given ID
+// If rt.considerLatency is true it will consider both xor distance and latency.
 func (rt *RoutingTable) NearestPeers(id ID, count int) []peer.ID {
 	// This is the number of bits _we_ share with the key. All peers in this
 	// bucket share cpl bits with us and will therefore share at least cpl+1
@@ -365,13 +379,30 @@ func (rt *RoutingTable) NearestPeers(id ID, count int) []peer.ID {
 		cpl = len(rt.buckets) - 1
 	}
 
-	pds := peerDistanceSorter{
-		peers:  make([]peerDistance, 0, count+rt.bucketsize),
-		target: id,
+	var s sorter
+	l := count + rt.bucketsize
+	// #BDWare
+	if rt.considerLatency {
+		s = &peerDistanceLatencySorter{
+			peers:                  make([]peer.ID, 0, l),
+			infos:                  make([]peerDistanceCplLatency, 0, l),
+			metrics:                rt.metrics,
+			local:                  rt.local,
+			target:                 id,
+			avgBitsImprovedPerStep: rt.avgBitsImprovedPerStep,
+			avgRoundTripPerStep:    rt.avgRoundTripPerStep,
+			avgLatency:             rt.avgLatency(),
+		}
+	} else {
+		s = &peerDistanceSorter{
+			peers:     make([]peer.ID, 0, l),
+			distances: make([]ID, 0, l),
+			target:    id,
+		}
 	}
 
 	// Add peers from the target bucket (cpl+1 shared bits).
-	pds.appendPeersFromList(rt.buckets[cpl].list)
+	s.appendPeersFromList(rt.buckets[cpl].list)
 
 	// If we're short, add peers from all buckets to the right. All buckets
 	// to the right share exactly cpl bits (as opposed to the cpl+1 bits
@@ -381,9 +412,9 @@ func (rt *RoutingTable) NearestPeers(id ID, count int) []peer.ID {
 	// to a trie implementation eventually which will allow us to find the
 	// closest N peers to any target key.
 
-	if pds.Len() < count {
+	if s.Len() < count {
 		for i := cpl + 1; i < len(rt.buckets); i++ {
-			pds.appendPeersFromList(rt.buckets[i].list)
+			s.appendPeersFromList(rt.buckets[i].list)
 		}
 	}
 
@@ -394,95 +425,20 @@ func (rt *RoutingTable) NearestPeers(id ID, count int) []peer.ID {
 	// * bucket cpl-1: cpl-1 shared bits.
 	// * bucket cpl-2: cpl-2 shared bits.
 	// ...
-	for i := cpl - 1; i >= 0 && pds.Len() < count; i-- {
-		pds.appendPeersFromList(rt.buckets[i].list)
+	for i := cpl - 1; i >= 0 && s.Len() < count; i-- {
+		s.appendPeersFromList(rt.buckets[i].list)
 	}
 	rt.tabLock.RUnlock()
 
 	// Sort by distance to local peer
-	pds.sort()
+	s.sort()
 
-	if count < pds.Len() {
-		pds.peers = pds.peers[:count]
+	if count > s.Len() {
+		count = s.Len()
 	}
 
-	out := make([]peer.ID, 0, pds.Len())
-	for _, p := range pds.peers {
-		out = append(out, p.p)
-	}
-
-	return out
-}
-
-// #BDWare
-// NearestPeersConsideringLatency returns a list of the 'count' closest peers
-// to the given ID by considering both xor distance and latency
-func (rt *RoutingTable) NearestPeersConsideringLatency(id ID, count int) []peer.ID {
-	// This is the number of bits _we_ share with the key. All peers in this
-	// bucket share cpl bits with us and will therefore share at least cpl+1
-	// bits with the given key. +1 because both the target and all peers in
-	// this bucket differ from us in the cpl bit.
-	cpl := CommonPrefixLen(id, rt.local)
-
-	// It's assumed that this also protects the buckets.
-	rt.tabLock.RLock()
-
-	// Get bucket index or last bucket
-	if cpl >= len(rt.buckets) {
-		cpl = len(rt.buckets) - 1
-	}
-
-	// init sorter
-	pdls := peerDistanceLatencySorter{
-		peers:                  make([]peerDistanceCplLatency, 0, count+rt.bucketsize),
-		metrics:                rt.metrics,
-		local:                  rt.local,
-		target:                 id,
-		avgBitsImprovedPerStep: rt.avgBitsImprovedPerStep,
-		avgRoundTripPerStep:    rt.avgRoundTripPerStep,
-		avgLatency:             rt.avgLatency(),
-	}
-
-	// Add peers from the target bucket (cpl+1 shared bits).
-	pdls.appendPeersFromList(rt.buckets[cpl].list)
-
-	// If we're short, add peers from all buckets to the right. All buckets
-	// to the right share exactly cpl bits (as opposed to the cpl+1 bits
-	// shared by the peers in the cpl bucket).
-	//
-	// This is, unfortunately, less efficient than we'd like. We will switch
-	// to a trie implementation eventually which will allow us to find the
-	// closest N peers to any target key.
-
-	if pdls.Len() < count {
-		for i := cpl + 1; i < len(rt.buckets); i++ {
-			pdls.appendPeersFromList(rt.buckets[i].list)
-		}
-	}
-
-	// If we're still short, add in buckets that share _fewer_ bits. We can
-	// do this bucket by bucket because each bucket will share 1 fewer bit
-	// than the last.
-	//
-	// * bucket cpl-1: cpl-1 shared bits.
-	// * bucket cpl-2: cpl-2 shared bits.
-	// ...
-	for i := cpl - 1; i >= 0 && pdls.Len() < count; i-- {
-		pdls.appendPeersFromList(rt.buckets[i].list)
-	}
-	rt.tabLock.RUnlock()
-
-	// Sort by distance to local peer
-	pdls.sort()
-
-	if count < pdls.Len() {
-		pdls.peers = pdls.peers[:count]
-	}
-
-	out := make([]peer.ID, 0, pdls.Len())
-	for _, p := range pdls.peers {
-		out = append(out, p.p)
-	}
+	out := make([]peer.ID, count)
+	copy(out, s.Peers()[:count])
 
 	return out
 }
