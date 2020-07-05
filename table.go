@@ -1,3 +1,9 @@
+// Copyright for portions of this fork are held by [Protocol Labs, Inc., 2016] as
+// part of the original go-libp2p-kbucket project. All other copyright for
+// this fork are held by [The BDWare Authors, 2020]. All rights reserved.
+// Use of this source code is governed by MIT license that can be
+// found in the LICENSE file.
+
 // package kbucket implements a kademlia 'k-bucket' routing table.
 package kbucket
 
@@ -55,6 +61,7 @@ type RoutingTable struct {
 	// it to make place for a new peer if the bucket is full
 	usefulnessGracePeriod time.Duration
 
+	// #BDWare
 	// Estimated average number of bits improved per step.
 	avgBitsImprovedPerStep float64
 	// Estimated average numbter of round trip required per step.
@@ -67,6 +74,7 @@ type RoutingTable struct {
 // NewRoutingTable creates a new routing table with a given bucketsize, local ID, and latency tolerance.
 func NewRoutingTable(bucketsize int, localID ID, latency time.Duration, m peerstore.Metrics, usefulnessGracePeriod time.Duration, avgBitsImprovedPerStep, avgRoundTripPerStep float64) (*RoutingTable, error) {
 
+	// #BDWare
 	// Estimate the average number of bits improved per step.
 	// Reference: D. Stutzbach and R. Rejaie, "Improving Lookup Performance Over a Widely-Deployed DHT," Proceedings IEEE INFOCOM 2006.
 	// For the basic Kademlia approach D(1,1,k), m(1,k) approaches log(2,k)+0.3327, the number of bits improved on average is 1+m(1,k)=1.3327+log(2,k)
@@ -406,6 +414,7 @@ func (rt *RoutingTable) NearestPeers(id ID, count int) []peer.ID {
 	return out
 }
 
+// #BDWare
 // NearestPeersConsideringLatency returns a list of the 'count' closest peers
 // to the given ID by considering both xor distance and latency
 func (rt *RoutingTable) NearestPeersConsideringLatency(id ID, count int) []peer.ID {
@@ -542,6 +551,7 @@ func (rt *RoutingTable) maxCommonPrefix() uint {
 	return 0
 }
 
+// #BDWare
 // avgLatency compute average latency of peers in nanoseconds.
 func (rt *RoutingTable) avgLatency() int64 {
 	latency := int64(0)

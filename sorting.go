@@ -1,3 +1,9 @@
+// Copyright for portions of this fork are held by [Protocol Labs, Inc., 2016] as
+// part of the original go-libp2p-kad-dht project. All other copyright for
+// this fork are held by [The BDWare Authors, 2020]. All rights reserved.
+// Use of this source code is governed by MIT license that can be
+// found in the LICENSE file.
+
 package kbucket
 
 import (
@@ -64,6 +70,8 @@ func SortClosestPeers(peers []peer.ID, target ID) []peer.ID {
 	}
 	return out
 }
+
+/* #BDWare */
 
 // A helper struct to sort peers by their distance to the local node,
 // and the latency between the local node and each peer

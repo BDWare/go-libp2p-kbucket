@@ -11,7 +11,11 @@ Fork of [libp2p/go-libp2p-kbucket](https://github.com/libp2p/go-libp2p-kbucket) 
 
 ## Documenation
 
-To use this fork, add the following line to your `go.mod`:
+```sh
+go get github.com/bdware/go-libp2p-kbucket
+```
+
+Add the following line to your `go.mod`:
 ```
 replace github.com/libp2p/go-libp2p-kbucket => github.com/bdware/go-libp2p-kbucket {{KBUCKET_VERSION}}
 ```

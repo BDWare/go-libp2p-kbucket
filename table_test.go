@@ -1,3 +1,9 @@
+// Copyright for portions of this fork are held by [Protocol Labs, Inc., 2016] as
+// part of the original go-libp2p-kad-dht project. All other copyright for
+// this fork are held by [The BDWare Authors, 2020]. All rights reserved.
+// Use of this source code is governed by MIT license that can be
+// found in the LICENSE file.
+
 package kbucket
 
 import (
@@ -492,7 +498,7 @@ func TestTableFindMultipleBuckets(t *testing.T) {
 	target := peers[2]
 	targetId := ConvertPeerID(target)
 
-	// Test closest peers sort by xor distance.
+	/* Test closest peers sort by xor distance. */
 
 	closest := SortClosestPeers(rt.ListPeers(), targetId)
 
@@ -522,7 +528,7 @@ func TestTableFindMultipleBuckets(t *testing.T) {
 		}
 	}
 
-	// Test closest peers sort by xor distance and latency.
+	/* #BDWare Test closest peers sort by xor distance and latency. */
 
 	closest = SortClosestPeersConsideringLatency(rt.ListPeers(), m, localId, targetId, avgBitsImprovedPerStep, avgRoundTripPerStep, rt.avgLatency())
 
