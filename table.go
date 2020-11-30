@@ -85,10 +85,36 @@ func (rt *RoutingTable) Close() error {
 	return nil
 }
 
-// TryAddPeer tries to add a peer to the Routing table. If the peer ALREADY exists in the Routing Table, this call is a no-op.
+// NPeersForCPL returns the number of peers we have for a given Cpl
+func (rt *RoutingTable) NPeersForCpl(cpl uint) int {
+	rt.tabLock.RLock()
+	defer rt.tabLock.RUnlock()
+
+	// it's in the last bucket
+	if int(cpl) >= len(rt.buckets)-1 {
+		count := 0
+		b := rt.buckets[len(rt.buckets)-1]
+		for _, p := range b.peers() {
+			if CommonPrefixLen(rt.local, p.dhtId) == int(cpl) {
+				count++
+			}
+		}
+		return count
+	} else {
+		return rt.buckets[cpl].len()
+	}
+}
+
+// TryAddPeer tries to add a peer to the Routing table.
+// If the peer ALREADY exists in the Routing Table and has been queried before, this call is a no-op.
+// If the peer ALREADY exists in the Routing Table but hasn't been queried before, we set it's LastUsefulAt value to
+// the current time. This needs to done because we don't mark peers as "Useful"(by setting the LastUsefulAt value)
+// when we first connect to them.
+//
 // If the peer is a queryPeer i.e. we queried it or it queried us, we set the LastSuccessfulOutboundQuery to the current time.
 // If the peer is just a peer that we connect to/it connected to us without any DHT query, we consider it as having
 // no LastSuccessfulOutboundQuery.
+//
 //
 // If the logical bucket to which the peer belongs is full and it's not the last bucket, we try to replace an existing peer
 // whose LastSuccessfulOutboundQuery is above the maximum allowed threshold in that bucket with the new peer.
@@ -117,6 +143,11 @@ func (rt *RoutingTable) addPeer(p peer.ID, queryPeer bool) (bool, error) {
 
 	// peer already exists in the Routing Table.
 	if peer := bucket.getPeer(p); peer != nil {
+		// if we're querying the peer first time after adding it, let's give it a
+		// usefulness bump. This will ONLY happen once.
+		if peer.LastUsefulAt.IsZero() && queryPeer {
+			peer.LastUsefulAt = lastUsefulAt
+		}
 		return false, nil
 	}
 
@@ -152,16 +183,17 @@ func (rt *RoutingTable) addPeer(p peer.ID, queryPeer bool) (bool, error) {
 
 	// the bucket to which the peer belongs is full. Let's try to find a peer
 	// in that bucket with a LastSuccessfulOutboundQuery value above the maximum threshold and replace it.
-	allPeers := bucket.peers()
-	for _, pc := range allPeers {
-		if time.Since(pc.LastUsefulAt) > rt.usefulnessGracePeriod {
-			// let's evict it and add the new peer
-			if bucket.remove(pc.Id) {
-				bucket.pushFront(&PeerInfo{Id: p, LastUsefulAt: lastUsefulAt, LastSuccessfulOutboundQueryAt: time.Now(),
-					dhtId: ConvertPeerID(p)})
-				rt.PeerAdded(p)
-				return true, nil
-			}
+	minLast := bucket.min(func(first *PeerInfo, second *PeerInfo) bool {
+		return first.LastUsefulAt.Before(second.LastUsefulAt)
+	})
+
+	if time.Since(minLast.LastUsefulAt) > rt.usefulnessGracePeriod {
+		// let's evict it and add the new peer
+		if bucket.remove(minLast.Id) {
+			bucket.pushFront(&PeerInfo{Id: p, LastUsefulAt: lastUsefulAt, LastSuccessfulOutboundQueryAt: time.Now(),
+				dhtId: ConvertPeerID(p)})
+			rt.PeerAdded(p)
+			return true, nil
 		}
 	}
 
@@ -228,9 +260,25 @@ func (rt *RoutingTable) removePeer(p peer.ID) {
 	bucketID := rt.bucketIdForPeer(p)
 	bucket := rt.buckets[bucketID]
 	if bucket.remove(p) {
+		for {
+			lastBucketIndex := len(rt.buckets) - 1
+
+			// remove the last bucket if it's empty and it isn't the only bucket we have
+			if len(rt.buckets) > 1 && rt.buckets[lastBucketIndex].len() == 0 {
+				rt.buckets[lastBucketIndex] = nil
+				rt.buckets = rt.buckets[:lastBucketIndex]
+			} else if len(rt.buckets) >= 2 && rt.buckets[lastBucketIndex-1].len() == 0 {
+				// if the second last bucket just became empty, remove and replace it with the last bucket.
+				rt.buckets[lastBucketIndex-1] = rt.buckets[lastBucketIndex]
+				rt.buckets[lastBucketIndex] = nil
+				rt.buckets = rt.buckets[:lastBucketIndex]
+			} else {
+				break
+			}
+		}
+
 		// peer removed callback
 		rt.PeerRemoved(p)
-		return
 	}
 }
 
